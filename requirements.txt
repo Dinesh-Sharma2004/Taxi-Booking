@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+geopy
+
+streamlit
+
+requests
+
+python-dotenv

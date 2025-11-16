@@ -1,0 +1,75 @@
+### ⚙️ Build and Dependency Artifacts ###
+---
+# React/JavaScript Build and Node Dependencies
+/dist
+/build
+/out
+/public/build
+.parcel-cache
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.npm
+.yarn/cache
+.pnp
+.pnp.js
+
+# Dependency directories
+/node_modules
+
+# Editor/OS Temporary Files
+.vscode
+.idea
+.tool-versions
+Thumbs.db
+###
+
+### 🐍 Python Virtual Environment ###
+---
+# Virtual Environment
+# Ignores the entire virtual environment directory, typically named 'venv' or '.venv'
+# Choose the one you use or keep both for safety
+/venv
+/.venv
+
+# Compiled Python files
+__pycache__
+*.pyc
+# C extensions
+*.so
+*.pyd
+
+# Testing and Coverage
+.coverage
+htmlcov/
+.nox/
+.tox/
+
+# Installer files
+pip-log.txt
+pip-delete-this-directory.txt
+.python-version
+###
+
+### 🔒 Configuration and Sensitive Files ###
+---
+# Environment variables and sensitive data
+.env
+.env.development
+.env.production
+.env.*.local
+.flaskenv
+.settings.ini
+
+# React Development
+# Output of create-react-app (or similar) test coverage
+coverage/
+
+# Misc
+*.swp
+*~
