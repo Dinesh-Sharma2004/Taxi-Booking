@@ -9,7 +9,7 @@ import { useBooking } from '../context/BookingContext';
 
 // --- IMPORTANT ---
 // Replace with your Google Maps API Key
-const GOOGLE_API_KEY = "AIzaSyBpWJtHj2x2ZA6ERaVRtkeV4_meNLvG1GU"; 
+const GOOGLE_API_KEY = "{add_google_api_key}"; 
 
 // --- UPDATED LIBRARIES: Added 'geocoding' for reverse lookup ---
 const libraries = ['places', 'geocoding'];
