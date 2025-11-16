@@ -45,7 +45,7 @@ BOOKINGS = {}
 # Fee Constants
 CANCEL_BASE_FEE = 25.0
 CANCEL_PER_KM_RATE = 5.0    # Fee per km driver *actually* traveled
-CANCEL_PER_MIN_RATE = 0.5    # Fee per minute user made the driver wait
+CANCEL_PER_MIN_RATE = 0.5   # Fee per minute user made the driver wait
 # ----------------------------------------------------
 
 # ---------------------------------------------
@@ -64,9 +64,37 @@ async def geocode(address: str):
     return loc["lat"], loc["lng"]
 
 # ---------------------------------------------
-# Utility: Distance + ETA using Distance Matrix API
+# Utility: Directions API for Polyline (New)
+# ---------------------------------------------
+async def get_route_polyline(lat1, lng1, lat2, lng2):
+    """Uses Directions API to get distance, duration, and the route polyline."""
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": f"{lat1},{lng1}",
+        "destination": f"{lat2},{lng2}",
+        "mode": "driving",
+        "key": GOOGLE_API_KEY
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(url, params=params)
+    data = r.json()
+    try:
+        route = data["routes"][0]["legs"][0]
+        polyline = data["routes"][0]["overview_polyline"]["points"]
+        
+        distance_m = route["distance"]["value"]
+        duration_s = route["duration"]["value"]
+        
+        return polyline, distance_m, duration_s
+    except (IndexError, KeyError, httpx.HTTPError) as e:
+        print(f"❌ Directions API Error: {e}. Status: {data.get('status', 'N/A')}. Response: {data}")
+        raise HTTPException(400, "❌ Failed to fetch detailed route path/data.")
+
+# ---------------------------------------------
+# Utility: Distance Matrix API (Fallback/Simpler)
 # ---------------------------------------------
 async def get_distance_eta(lat1, lng1, lat2, lng2):
+    """Kept as a simple fallback if Directions API is too complex/slow."""
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
     params = {
         "origins": f"{lat1},{lng1}",
@@ -87,8 +115,9 @@ async def get_distance_eta(lat1, lng1, lat2, lng2):
         raise HTTPException(400, "❌ Failed to fetch distance/ETA")
     return element["distance"]["value"], element["duration"]["value"]
 
+
 # ---------------------------------------------
-# Utility: Weather-based surge
+# Utility: Weather-based surge (Unchanged)
 # ---------------------------------------------
 async def get_weather(lat, lng):
     url = "https://weather.googleapis.com/v1/currentConditions:lookup"
@@ -116,7 +145,7 @@ def surge_multiplier(weather: str):
     return 1.0
 
 # ---------------------------------------------
-# Utility: Taxi Simulation & Finding
+# Utility: Taxi Simulation & Finding (Unchanged)
 # ---------------------------------------------
 def generate_simulated_taxis(base_lat, base_lng, count=10) -> List[Dict]:
     """Generates a list of simulated taxis near a central point (Delhi)."""
@@ -160,7 +189,7 @@ def find_nearest_taxi(pickup_lat, pickup_lng, taxi_list: List[Dict]):
     return best
 
 # ---------------------------------------------
-# NEW ENDPOINT: GET ESTIMATE/QUOTE (NO BOOKING)
+# ENDPOINT: GET ESTIMATE/QUOTE (UPDATED)
 # ---------------------------------------------
 @app.post("/booking/estimate")
 async def booking_estimate(pickup: str, drop: str):
@@ -175,22 +204,32 @@ async def booking_estimate(pickup: str, drop: str):
     if not taxi:
         raise HTTPException(400, "❌ No taxis available for estimate")
 
-    # 3. Get taxi's route to pickup location
+    # 3. Get taxi's route to pickup location (USING DIRECTIONS API FOR POLYLINE)
     try:
-        taxi_dist_m, taxi_dur_s = await get_distance_eta(
+        taxi_route_polyline, taxi_dist_m, taxi_dur_s = await get_route_polyline(
             taxi["lat"], taxi["lng"], pick_lat, pick_lng
         )
         taxi_eta_min = max(1, int(taxi_dur_s / 60))
         taxi_distance_km = round(taxi_dist_m / 1000, 2)
-    except:
-        taxi_eta_min = 5 
-        taxi_distance_km = 3.0
+    except HTTPException:
+        # Fallback if Directions API fails for taxi approach
+        taxi_route_polyline = None
+        taxi_dist_m, taxi_dur_s = await get_distance_eta(taxi["lat"], taxi["lng"], pick_lat, pick_lng)
+        taxi_eta_min = max(1, int(taxi_dur_s / 60))
+        taxi_distance_km = round(taxi_dist_m / 1000, 2)
     
-    # 4. Get main trip Distance/ETA (Pickup -> Drop)
-    dist_m, dur_s = await get_distance_eta(pick_lat, pick_lng, drop_lat, drop_lng)
-    distance_km = round(dist_m / 1000, 2)
-    eta_min = max(1, int(dur_s / 60))
-    
+    # 4. Get main trip Distance/ETA/Route (Pickup -> Drop)
+    try:
+        trip_route_polyline, dist_m, dur_s = await get_route_polyline(pick_lat, pick_lng, drop_lat, drop_lng)
+        distance_km = round(dist_m / 1000, 2)
+        eta_min = max(1, int(dur_s / 60))
+    except HTTPException:
+        # Fallback if Directions API fails for the main trip
+        trip_route_polyline = None
+        dist_m, dur_s = await get_distance_eta(pick_lat, pick_lng, drop_lat, drop_lng)
+        distance_km = round(dist_m / 1000, 2)
+        eta_min = max(1, int(dur_s / 60))
+
     # 5. Weather
     weather = await get_weather(pick_lat, pick_lng)
     multiplier = surge_multiplier(weather)
@@ -200,7 +239,7 @@ async def booking_estimate(pickup: str, drop: str):
     per_km = 12
     fare = round((base + distance_km * per_km) * multiplier, 2)
     
-    # 7. Return Quote (No booking saved, taxi not locked)
+    # 7. Return Quote (Including new polyline data)
     return {
         "id": str(uuid.uuid4()), # Temporary quote ID
         "taxi": taxi["id"],
@@ -216,13 +255,17 @@ async def booking_estimate(pickup: str, drop: str):
         "drop_lat": drop_lat,
         "drop_lng": drop_lng,
         "taxi_start_lat": taxi["lat"],
-        "taxi_start_lng": taxi["lng"],
+        "taxi_start_lng": taxi["lng"], # CRITICAL: This is the taxi's real starting position
         "taxi_eta_min": taxi_eta_min,
-        "taxi_distance_km": taxi_distance_km
+        "taxi_distance_km": taxi_distance_km,
+        
+        # --- NEW DATA FOR ROUTE-BASED SIMULATION ---
+        "taxi_route_polyline": taxi_route_polyline, # Polyline for taxi -> pickup
+        "trip_route_polyline": trip_route_polyline # Polyline for pickup -> drop
     }
 
 # ---------------------------------------------
-# NEW ENDPOINT: CONFIRM BOOKING
+# NEW ENDPOINT: CONFIRM BOOKING (Unchanged)
 # ---------------------------------------------
 @app.post("/booking/confirm")
 async def booking_confirm(quote: Dict):
@@ -230,9 +273,10 @@ async def booking_confirm(quote: Dict):
     
     # 1. Lock Taxi (if it's a real one)
     if taxi_id.startswith("T"):
-        if TAXIS[taxi_id]["available"] is False:
+        if TAXIS.get(taxi_id) and TAXIS[taxi_id]["available"] is False:
              raise HTTPException(400, "❌ Taxi just became unavailable. Please re-quote.")
-        TAXIS[taxi_id]["available"] = False 
+        if TAXIS.get(taxi_id):
+            TAXIS[taxi_id]["available"] = False 
     
     # 2. Save Booking
     bid = str(uuid.uuid4()) # Use a new definitive ID
@@ -252,6 +296,7 @@ def _calculate_cancellation_fee(booking: Dict, time_elapsed_seconds: int) -> flo
     taxi_total_eta_min = booking.get("taxi_eta_min", 1)
     taxi_total_eta_sec = taxi_total_eta_min * 60.0
 
+    # Calculate progress based on time elapsed vs. estimated taxi arrival time
     progress = min(1.0, time_elapsed_seconds / taxi_total_eta_sec)
     distance_traveled_km = taxi_total_dist_km * progress
     
@@ -315,7 +360,7 @@ async def cancel_booking(booking_id: str):
         return {
             "status": "cancelled",
             "fee_applied": True,
-            "message": f"Booking canceled after {int(time_elapsed_seconds)} seconds.",
+            "message": f"Booking canceled after {int(time_elapsed_seconds)} seconds. Fee applied.",
             "cancellation_fee": total_fee
         }
 
